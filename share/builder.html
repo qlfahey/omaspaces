@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workspace Builder</title>
+<style>
+  :root{
+    /* Neutral fallbacks only — real values are pulled from the active Omarchy
+       theme at launch via /api/theme and set as these same variables. */
+    --bg:#16181d; --panel:#1c1f26; --panel2:#22262f; --line:#2c313c;
+    --ink:#e6e9ef; --dim:#9aa3b2; --accent:#7aa2f7; --accent2:#9ece6a;
+    --tile:#2a2f3a; --tile-sel:#33405c; --canvas:#0e1014; --radius:10px;
+    --font:ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden;font-family:var(--font)}
+  button,input,select{font-family:var(--font)}
+  header{display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid var(--line);background:var(--panel)}
+  header h1{font-size:15px;font-weight:600;margin:0;letter-spacing:.2px}
+  header .mon{font-size:12px;color:var(--dim)}
+  header .spacer{flex:1}
+  .btn{background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:8px;
+       padding:7px 12px;font-size:13px;cursor:pointer;transition:.12s}
+  .btn:hover{border-color:var(--accent);color:#fff}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#0b0f1a;font-weight:600}
+  .btn.good{background:var(--accent2);border-color:var(--accent2);color:#0b1a0b;font-weight:600}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  main{flex:1;display:flex;min-height:0}
+  .stage{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;gap:14px;min-width:0}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+  .toolbar .grp{display:flex;gap:6px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:6px}
+  .toolbar .lbl{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;padding:0 4px}
+  .chip{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:6px 10px;font-size:12.5px;cursor:pointer}
+  .chip:hover{border-color:var(--accent)}
+  #canvasWrap{background:var(--canvas);border:1px solid var(--line);border-radius:14px;padding:12px;box-shadow:0 10px 40px rgba(0,0,0,.4)}
+  #canvas{position:relative;background:var(--canvas);border-radius:8px;overflow:hidden}
+  .tile{position:absolute;background:var(--tile);border:1px solid var(--line);border-radius:7px;
+        display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+        cursor:pointer;overflow:hidden;transition:background .1s,border-color .1s;padding:6px;text-align:center}
+  .tile:hover{border-color:var(--dim)}
+  .tile.sel{background:var(--tile-sel);border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+  .tile .app{font-size:13px;font-weight:600;line-height:1.2;word-break:break-word}
+  .tile .empty{font-size:12px;color:var(--dim);font-style:italic}
+  .tile .dim{font-size:10.5px;color:var(--dim);font-variant-numeric:tabular-nums}
+  .divider{position:absolute;background:transparent;z-index:5}
+  .divider.v{cursor:col-resize} .divider.h{cursor:row-resize}
+  .divider::after{content:"";position:absolute;background:var(--line);border-radius:3px;transition:background .1s}
+  .divider:hover::after{background:var(--accent)}
+  .divider.v::after{left:50%;top:8%;width:3px;height:84%;transform:translateX(-50%)}
+  .divider.h::after{top:50%;left:8%;height:3px;width:84%;transform:translateY(-50%)}
+  aside{width:340px;border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
+  .pane{padding:16px;overflow-y:auto;flex:1}
+  .pane h2{font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--dim);margin:0 0 10px}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:12px;color:var(--dim);margin-bottom:5px}
+  input[type=text],select{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+       color:var(--ink);padding:8px 10px;font-size:13px;font-family:inherit}
+  input:focus,select:focus{outline:none;border-color:var(--accent)}
+  .hint{font-size:11.5px;color:var(--dim);margin-top:5px;line-height:1.4}
+  .sel-none{color:var(--dim);font-size:13px;font-style:italic;padding:8px 0}
+  .foot{border-top:1px solid var(--line);padding:14px 16px;display:flex;flex-direction:column;gap:10px;background:var(--panel)}
+  .foot .row{display:flex;gap:8px}
+  .foot .row .btn{flex:1;text-align:center}
+  details{margin-top:6px}
+  summary{cursor:pointer;font-size:12px;color:var(--dim)}
+  pre#json{background:var(--canvas);border:1px solid var(--line);border-radius:8px;padding:10px;font-size:11px;
+       color:var(--dim);overflow:auto;max-height:200px;margin:8px 0 0;white-space:pre-wrap;word-break:break-word}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel2);
+       border:1px solid var(--accent);color:var(--ink);padding:10px 18px;border-radius:10px;font-size:13px;
+       opacity:0;transition:.2s;pointer-events:none;z-index:50}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+<header>
+  <h1>Workspace Builder</h1>
+  <span class="mon" id="mon"></span>
+  <span class="spacer"></span>
+  <select id="loadSel" title="Load an existing layout"><option value="">Load layout…</option></select>
+  <button class="btn" id="resetBtn">Reset</button>
+</header>
+
+<main>
+  <div class="stage">
+    <div class="toolbar">
+      <div class="grp"><span class="lbl">Templates</span>
+        <span class="chip" data-tpl="single">Single</span>
+        <span class="chip" data-tpl="cols2">2 Columns</span>
+        <span class="chip" data-tpl="cols3">3 Columns</span>
+        <span class="chip" data-tpl="mainstack">Main + Stack</span>
+        <span class="chip" data-tpl="grid4">Grid 2×2</span>
+      </div>
+      <div class="grp"><span class="lbl">Selected tile</span>
+        <span class="chip" id="splitV">Split ▏▏</span>
+        <span class="chip" id="splitH">Split ▁▔</span>
+        <span class="chip" id="delTile">Remove</span>
+      </div>
+    </div>
+    <div id="canvasWrap"><div id="canvas"></div></div>
+    <div class="hint" style="color:var(--dim)">Click a tile to select · drag a divider to resize · assign an app on the right</div>
+  </div>
+
+  <aside>
+    <div class="pane">
+      <h2>Tile</h2>
+      <div id="tileEditor"><div class="sel-none">Select a tile to put an app in it.</div></div>
+      <details>
+        <summary>Layout JSON (agent-editable)</summary>
+        <pre id="json"></pre>
+      </details>
+    </div>
+    <div class="foot">
+      <div class="field" style="margin:0">
+        <label for="wsName">Workspace name</label>
+        <input type="text" id="wsName" placeholder="e.g. deep-work" autocomplete="off">
+      </div>
+      <div class="row">
+        <button class="btn" id="saveBtn">Save</button>
+        <button class="btn good" id="applyBtn">Save &amp; Apply</button>
+      </div>
+      <div class="row">
+        <button class="btn" id="previewBtn">Preview</button>
+        <button class="btn primary" id="doneBtn">Save &amp; Close</button>
+      </div>
+    </div>
+  </aside>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+let apps = [], monitor = null, tree = null, selId = null, uid = 1;
+const nid = () => 'n' + (uid++);
+const leaf = (app=null) => ({id:nid(), app});
+
+// ---- templates -------------------------------------------------------------
+const TEMPLATES = {
+  single: () => leaf(),
+  cols2: () => ({id:nid(), split:'v', ratio:.5, a:leaf(), b:leaf()}),
+  cols3: () => ({id:nid(), split:'v', ratio:.3333, a:leaf(),
+                 b:{id:nid(), split:'v', ratio:.5, a:leaf(), b:leaf()}}),
+  mainstack: () => ({id:nid(), split:'v', ratio:.6, a:leaf(),
+                 b:{id:nid(), split:'h', ratio:.5, a:leaf(), b:leaf()}}),
+  grid4: () => ({id:nid(), split:'h', ratio:.5,
+                 a:{id:nid(), split:'v', ratio:.5, a:leaf(), b:leaf()},
+                 b:{id:nid(), split:'v', ratio:.5, a:leaf(), b:leaf()}}),
+};
+
+// ---- tree helpers ----------------------------------------------------------
+function isLeaf(n){ return n && !n.split; }
+function computeRects(n, r){ n._rect = r;
+  if(isLeaf(n)) return;
+  const [x,y,w,h] = r;
+  if(n.split==='v'){ const wa=w*n.ratio;
+    computeRects(n.a,[x,y,wa,h]); computeRects(n.b,[x+wa,y,w-wa,h]); }
+  else { const ha=h*n.ratio;
+    computeRects(n.a,[x,y,w,ha]); computeRects(n.b,[x,y+ha,w,h-ha]); }
+}
+function eachLeaf(n, f){ if(isLeaf(n)) f(n); else { eachLeaf(n.a,f); eachLeaf(n.b,f); } }
+function eachNode(n, f){ f(n); if(!isLeaf(n)){ eachNode(n.a,f); eachNode(n.b,f);} }
+function findParent(root, id, parent=null){
+  if(root.id===id) return parent;
+  if(isLeaf(root)) return null;
+  return findParent(root.a,id,root) || findParent(root.b,id,root);
+}
+function findNode(root, id){ let hit=null; eachNode(root,n=>{ if(n.id===id) hit=n; }); return hit; }
+
+// ---- rendering -------------------------------------------------------------
+function sizeCanvas(){
+  const wrap = $('#canvasWrap'), cv = $('#canvas');
+  const usableW = monitor.lw - monitor.reserved[0] - monitor.reserved[2] - 2*monitor.gaps_out;
+  const usableH = monitor.lh - monitor.reserved[1] - monitor.reserved[3] - 2*monitor.gaps_out;
+  const aspect = usableW/usableH;
+  const maxW = Math.min(window.innerWidth-380, 900), maxH = window.innerHeight-230;
+  let w = maxW, h = w/aspect;
+  if(h>maxH){ h=maxH; w=h*aspect; }
+  cv.style.width = w+'px'; cv.style.height = h+'px';
+  return {w,h};
+}
+function render(){
+  const cv = $('#canvas'); cv.innerHTML='';
+  const {w,h} = sizeCanvas();
+  computeRects(tree,[0,0,1,1]);
+  const gapPct = 0.5; // visual inner gap in %
+  eachLeaf(tree, n=>{
+    const [x,y,tw,th]=n._rect;
+    const el=document.createElement('div'); el.className='tile'+(n.id===selId?' sel':'');
+    el.style.left=(x*100+gapPct)+'%'; el.style.top=(y*100+gapPct)+'%';
+    el.style.width=(tw*100-2*gapPct)+'%'; el.style.height=(th*100-2*gapPct)+'%';
+    const pctW=Math.round(tw*100), pctH=Math.round(th*100);
+    el.innerHTML = n.app
+      ? `<span class="app">${esc(n.app.label)}</span><span class="dim">${pctW}% × ${pctH}%</span>`
+      : `<span class="empty">empty</span><span class="dim">${pctW}% × ${pctH}%</span>`;
+    el.onclick = e=>{ e.stopPropagation(); select(n.id); };
+    cv.appendChild(el);
+  });
+  // dividers
+  eachNode(tree, n=>{
+    if(isLeaf(n)) return;
+    const [x,y,tw,th]=n._rect;
+    const d=document.createElement('div');
+    const hit=14;
+    if(n.split==='v'){ const dx=(x+tw*n.ratio);
+      d.className='divider v';
+      d.style.left=`calc(${dx*100}% - ${hit/2}px)`; d.style.top=(y*100)+'%';
+      d.style.width=hit+'px'; d.style.height=(th*100)+'%';
+    } else { const dy=(y+th*n.ratio);
+      d.className='divider h';
+      d.style.top=`calc(${dy*100}% - ${hit/2}px)`; d.style.left=(x*100)+'%';
+      d.style.height=hit+'px'; d.style.width=(tw*100)+'%';
+    }
+    d.onpointerdown = ev => startDrag(ev, n);
+    cv.appendChild(d);
+  });
+  renderEditor(); $('#json').textContent = JSON.stringify(outputLayout(), null, 2);
+}
+function esc(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+// ---- divider drag ----------------------------------------------------------
+function startDrag(ev, node){
+  ev.preventDefault();
+  const cv=$('#canvas').getBoundingClientRect();
+  const [x,y,w,h]=node._rect;
+  function move(e){
+    let r;
+    if(node.split==='v') r=((e.clientX-cv.left)/cv.width - x)/w;
+    else                 r=((e.clientY-cv.top)/cv.height - y)/h;
+    node.ratio=Math.max(.1,Math.min(.9,r)); render();
+  }
+  function up(){ document.removeEventListener('pointermove',move); document.removeEventListener('pointerup',up); }
+  document.addEventListener('pointermove',move); document.addEventListener('pointerup',up);
+}
+
+// ---- selection & editing ---------------------------------------------------
+function select(id){ selId=id; render(); }
+function renderEditor(){
+  const box=$('#tileEditor');
+  const n = selId ? findNode(tree, selId) : null;
+  if(!n || !isLeaf(n)){ box.innerHTML='<div class="sel-none">Select a tile to put an app in it.</div>'; return; }
+  const opts = ['<option value="">— choose an app —</option>']
+    .concat(apps.map((a,i)=>`<option value="${i}"${n.app&&n.app.exec===a.exec?' selected':''}>${esc(a.name)}</option>`))
+    .concat(`<option value="custom"${n.app&&n.app.custom?' selected':''}>Custom command…</option>`).join('');
+  const custom = n.app && n.app.custom;
+  box.innerHTML = `
+    <div class="field"><label>App in this tile</label>
+      <select id="appSel">${opts}</select></div>
+    <div class="field" id="customWrap" style="${custom?'':'display:none'}">
+      <label>Command</label><input type="text" id="execIn" placeholder="e.g. foot" value="${esc(custom?n.app.exec:'')}">
+      <label style="margin-top:8px">Window match (class)</label>
+      <input type="text" id="matchIn" placeholder="class:foot" value="${esc(custom?n.app.match:'')}">
+      <div class="hint">Match lets Apply reuse an already-open window instead of launching a new one.</div>
+    </div>
+    ${n.app?`<button class="btn" id="clearApp">Clear tile</button>`:''}`;
+  $('#appSel').onchange = e=>{
+    const v=e.target.value;
+    if(v===''){ n.app=null; }
+    else if(v==='custom'){ n.app={label:'Custom',exec:'',match:'',custom:true}; }
+    else { const a=apps[+v]; n.app={label:a.name, exec:a.exec,
+             match:a.wmclass?('class:'+a.wmclass):('class:'+guessClass(a.exec))}; }
+    render();
+  };
+  if($('#execIn')) $('#execIn').oninput = e=>{ n.app.exec=e.target.value; n.app.label=e.target.value||'Custom'; $('#json').textContent=JSON.stringify(outputLayout(),null,2); };
+  if($('#matchIn')) $('#matchIn').oninput = e=>{ n.app.match=e.target.value; $('#json').textContent=JSON.stringify(outputLayout(),null,2); };
+  if($('#clearApp')) $('#clearApp').onclick = ()=>{ n.app=null; render(); };
+}
+function guessClass(exec){ return (exec.split(' ')[0].split('/').pop()||'').toLowerCase(); }
+
+// ---- output ----------------------------------------------------------------
+function outputLayout(){
+  computeRects(tree,[0,0,1,1]);
+  const tiles=[];
+  eachLeaf(tree, n=>{ if(!n.app||!n.app.exec) return;
+    const [x,y,w,h]=n._rect;
+    tiles.push({exec:n.app.exec, match:n.app.match||('class:'+guessClass(n.app.exec)),
+                region:[round(x),round(y),round(w),round(h)]});
+  });
+  return {name:($('#wsName').value||'untitled').trim(), tiles};
+}
+const round = v => Math.round(v*10000)/10000;
+
+// ---- actions ---------------------------------------------------------------
+function setTree(t){ tree=t; selId=null; render(); }
+$('#resetBtn').onclick = ()=> setTree(TEMPLATES.single());
+document.querySelectorAll('.chip[data-tpl]').forEach(c=>c.onclick=()=>setTree(TEMPLATES[c.dataset.tpl]()));
+$('#splitV').onclick = ()=> splitSel('v');
+$('#splitH').onclick = ()=> splitSel('h');
+$('#delTile').onclick = removeSel;
+function splitSel(dir){
+  if(!selId) return toast('Select a tile first');
+  const n=findNode(tree,selId); if(!isLeaf(n)) return;
+  const child={id:nid(), app:n.app}, extra=leaf();
+  delete n.app; n.split=dir; n.ratio=.5; n.a=child; n.b=extra;
+  selId=child.id; render();
+}
+function removeSel(){
+  if(!selId) return;
+  const parent=findParent(tree,selId);
+  if(!parent){ return toast("Can't remove the only tile"); }
+  const sibling = parent.a.id===selId ? parent.b : parent.a;
+  Object.keys(parent).forEach(k=>delete parent[k]);
+  Object.assign(parent, sibling);
+  selId=parent.id; render();
+}
+
+async function post(path, body){
+  const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  return r.json();
+}
+$('#saveBtn').onclick = async ()=>{
+  const l=outputLayout(); if(!validate(l)) return;
+  const r=await post('/api/save', l);
+  toast(r.ok?`Saved “${r.name}”`:('Error: '+(r.error||'?'))); refreshLayouts();
+};
+$('#applyBtn').onclick = async ()=>{
+  const l=outputLayout(); if(!validate(l)) return;
+  toast('Applying…');
+  const r=await post('/api/apply', {name:l.name, tiles:l.tiles});
+  toast(`Applied to workspace ${r.target} · ${r.placed}/${r.total} tiles`); refreshLayouts();
+};
+$('#previewBtn').onclick = async ()=>{
+  const l=outputLayout(); if(!validate(l,true)) return;
+  toast('Opening preview…');
+  const r=await post('/api/apply', {tiles:l.tiles});
+  toast(`Preview on workspace ${r.target} · ${r.placed}/${r.total} tiles`);
+};
+$('#doneBtn').onclick = async ()=>{
+  const l=outputLayout(); if(!validate(l)) return;
+  await post('/api/save', l);
+  await fetch('/api/quit',{method:'POST'}).catch(()=>{});  // closes the window + stops the server
+};
+// If the window is closed by other means, still tell the server to shut down.
+window.addEventListener('pagehide', ()=>{ try{ navigator.sendBeacon('/api/quit'); }catch(e){} });
+function validate(l, allowNoName){
+  if(!l.tiles.length){ toast('Add at least one app to a tile'); return false; }
+  if(!allowNoName && (!$('#wsName').value.trim())){ toast('Name your workspace first'); $('#wsName').focus(); return false; }
+  return true;
+}
+let toastT;
+function toast(m){ const t=$('#toast'); t.textContent=m; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),2600); }
+
+// ---- load existing ---------------------------------------------------------
+async function refreshLayouts(){
+  const names=await (await fetch('/api/layouts')).json();
+  const sel=$('#loadSel'); sel.innerHTML='<option value="">Load layout…</option>'+
+    names.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
+}
+$('#loadSel').onchange = async e=>{
+  const name=e.target.value; if(!name) return;
+  const l=await (await fetch('/api/layout?name='+encodeURIComponent(name))).json();
+  $('#wsName').value=l.name||name;
+  setTree(layoutToTree(l.tiles)); e.target.value='';
+  toast(`Loaded “${name}” — tiles approximated as columns`);
+};
+// Saved layouts are flat rects; approximate them as a row of columns for editing.
+function layoutToTree(tiles){
+  if(!tiles||!tiles.length) return TEMPLATES.single();
+  const leaves=tiles.map(t=>leaf({label:appLabel(t), exec:t.exec, match:t.match,
+                                  custom:!knownApp(t.exec)}));
+  let node=leaves[0];
+  for(let i=1;i<leaves.length;i++) node={id:nid(),split:'v',ratio:1/(i+1),a:node,b:leaves[i]};
+  return node;
+}
+function knownApp(exec){ return apps.some(a=>a.exec===exec); }
+function appLabel(t){ const a=apps.find(a=>a.exec===t.exec); return a?a.name:t.exec.split(' ')[0]; }
+
+// ---- theme (mirror the active Omarchy theme; works for ANY theme) ----------
+function applyTheme(t){
+  const c=t.colors||{}, r=document.documentElement.style;
+  const set=(v,val)=>{ if(val) r.setProperty(v,val); };
+  // Map whatever keys the theme's colors.toml provides onto our variables,
+  // each with a graceful fallback so partial palettes still look right.
+  set('--bg',      c.background);
+  set('--panel',   c.lighter_background || c.background);
+  set('--panel2',  c.selection || c.muted || c.lighter_background);
+  set('--line',    c.muted || c.selection || c.dark_foreground);
+  set('--ink',     c.bright_foreground || c.foreground);
+  set('--dim',     c.light_foreground || c.dark_foreground || c.foreground);
+  set('--accent',  c.accent || c.blue);
+  set('--accent2', c.green || c.accent);
+  set('--tile',    c.lighter_background || c.selection || c.background);
+  set('--tile-sel',c.selection || c.muted);
+  set('--canvas',  c.darker_background || c.dark_background || c.background);
+  if(t.font) set('--font', `"${t.font}", ui-monospace, monospace`);
+  // The picked-app text on a highlighted tile needs contrast on the accent.
+  if(t.mode==='light'){ r.setProperty('--onaccent','#fff'); }
+}
+
+// ---- boot ------------------------------------------------------------------
+(async function(){
+  try{ applyTheme(await (await fetch('/api/theme')).json()); }catch(e){}
+  monitor = await (await fetch('/api/monitor')).json();
+  apps = await (await fetch('/api/apps')).json();
+  $('#mon').textContent = `${monitor.name} · ${monitor.lw}×${monitor.lh}`;
+  await refreshLayouts();
+  setTree(TEMPLATES.mainstack());
+  window.addEventListener('resize', render);
+})();
+</script>
+</body>
+</html>

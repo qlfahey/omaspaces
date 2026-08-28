@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Workspace Builder
+GenericName=Workspace Layout Designer
+Comment=Design and launch Hyprland workspace layouts with omaspaces
+Exec=omaspaces build
+Icon=preferences-desktop-display
+Terminal=false
+Categories=Utility;System;Settings;
+Keywords=workspace;layout;dock;overview;hyprland;omarchy;spaces;
+StartupNotify=false

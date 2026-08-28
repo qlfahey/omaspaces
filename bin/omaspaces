@@ -1,0 +1,809 @@
+#!/usr/bin/env python3
+"""omaspaces — design, save, and summon workspace layouts.
+
+Part of the Omarchy "spaces" system. A layout is a plain JSON file in
+~/.config/omarchy/layouts/ describing which apps live in a workspace and the
+exact tile each one occupies. The format is intentionally simple so that you —
+or your agent — can read, write, and share layouts by hand.
+
+  omaspaces list                 # show saved layouts
+  omaspaces save <name>          # snapshot the current workspace
+  omaspaces apply <name>         # build it in a fresh workspace
+  omaspaces apply <name> --here  # rebuild it on the current workspace
+  omaspaces show <name>          # print a layout file
+  omaspaces edit <name>          # open it in $EDITOR
+  omaspaces rm <name>            # delete a layout
+
+A layout file:
+
+  {
+    "name": "dev",
+    "tiles": [
+      { "exec": "foot", "match": "class:foot", "region": [0.0, 0.0, 0.6, 1.0] },
+      { "exec": "nautilus", "match": "class:org.gnome.Nautilus", "region": [0.6, 0.5, 0.4, 0.5] }
+    ]
+  }
+
+region is [x, y, w, h] as fractions of the monitor work area, so a layout is
+resolution-independent and drops onto any screen.
+"""
+
+import argparse
+import glob
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+LAYOUT_DIR = Path(os.path.expanduser("~/.config/omarchy/layouts"))
+DATA_DIR = Path(os.path.expanduser(os.environ.get("OMASPACES_HOME", "~/.local/share/omaspaces")))
+
+def _asset_dir():
+    """UI assets (QML, builder.html) — may be read-only (a /usr system install)."""
+    candidates = [os.environ.get("OMASPACES_ASSETS"), str(DATA_DIR),
+                  "/usr/share/omaspaces", os.path.expanduser("~/.local/share/omaspaces")]
+    for c in candidates:
+        if c and (Path(c) / "qml" / "shell.qml").exists():
+            return Path(c)
+    return DATA_DIR
+
+ASSET_DIR = _asset_dir()
+BUILDER_HTML = ASSET_DIR / "builder.html"
+QML_DIR = ASSET_DIR / "qml"
+DOCK_QML_DIR = ASSET_DIR / "qml-dock"
+
+BUILDER_PROC = None
+
+CLASS_EXEC = {
+    "foot": "foot",
+    "alacritty": "alacritty",
+    "org.alacritty.alacritty": "alacritty",
+    "kitty": "kitty",
+    "ghostty": "ghostty",
+    "com.mitchellh.ghostty": "ghostty",
+    "google-chrome": "omarchy-launch-browser",
+    "chromium": "omarchy-launch-browser",
+    "brave-browser": "omarchy-launch-browser",
+    "firefox": "firefox",
+    "zen": "zen",
+    "org.mozilla.firefox": "firefox",
+    "code": "code",
+    "code-oss": "code",
+    "code-url-handler": "code",
+    "vscodium": "codium",
+    "org.gnome.nautilus": "nautilus",
+    "nautilus": "nautilus",
+    "org.gnome.texteditor": "gnome-text-editor",
+    "obsidian": "obsidian",
+    "slack": "slack",
+    "spotify": "spotify",
+    "signal": "signal-desktop",
+}
+
+def hypr(*args):
+    return subprocess.run(["hyprctl", *args], capture_output=True, text=True).stdout
+
+def hypr_json(*args):
+    out = hypr(*args, "-j")
+    try:
+        return json.loads(out)
+    except json.JSONDecodeError:
+        return None
+
+def lua(snippet):
+    """Evaluate a Lua expression through this build's `hyprctl dispatch` (which
+    wraps the argument as hl.dispatch(...)). Pass a dispatcher or a function."""
+    return subprocess.run(["hyprctl", "dispatch", snippet], capture_output=True, text=True)
+
+def exec_cmd(cmd):
+    """Launch a command via the compositor (raw, so its window is catchable)."""
+    safe = cmd.replace("\\", "\\\\").replace('"', '\\"')
+    lua(f'hl.dsp.exec_cmd("{safe}")')
+
+def focus_workspace(ws):
+    lua(f'hl.dsp.focus({{ workspace = "{ws}" }})')
+
+def notify(title, body="", urgency="normal"):
+    if shutil.which("notify-send"):
+        subprocess.run(
+            ["notify-send", "-a", "Omarchy Layout", "-u", urgency, title, body],
+            capture_output=True,
+        )
+
+def die(msg):
+    print(f"omaspaces: {msg}", file=sys.stderr)
+    notify("Layout error", msg, urgency="critical")
+    sys.exit(1)
+
+def _first_int(css):
+    m = re.search(r"-?\d+", css or "")
+    return int(m.group()) if m else 0
+
+def gaps():
+    gi = hypr_json("getoption", "general:gaps_in") or {}
+    go = hypr_json("getoption", "general:gaps_out") or {}
+    return _first_int(gi.get("css", "5")), _first_int(go.get("css", "10"))
+
+def focused_monitor():
+    mons = hypr_json("monitors") or []
+    for m in mons:
+        if m.get("focused"):
+            return m
+    return mons[0] if mons else die("no monitors reported by hyprctl")
+
+def workarea(mon):
+    """Return the usable rectangle in logical (scaled) coordinates.
+
+    hyprctl reports monitor width/height in physical pixels; window geometry is
+    in logical pixels (physical / scale). reserved[] (bar etc.) is logical.
+    """
+    scale = mon.get("scale", 1.0) or 1.0
+    lw = round(mon["width"] / scale)
+    lh = round(mon["height"] / scale)
+    rl, rt, rr, rb = (mon.get("reserved") or [0, 0, 0, 0])
+    _, go = gaps()
+    x0 = mon.get("x", 0) + rl + go
+    y0 = mon.get("y", 0) + rt + go
+    w = lw - rl - rr - 2 * go
+    h = lh - rt - rb - 2 * go
+    return x0, y0, w, h
+
+def tile_rect(region, area):
+    """Map a fractional [x,y,w,h] onto the work area, inset by the inner gap."""
+    x0, y0, w, h = area
+    gi, _ = gaps()
+    fx, fy, fw, fh = region
+    rx = x0 + fx * w + gi / 2
+    ry = y0 + fy * h + gi / 2
+    rw = fw * w - gi
+    rh = fh * h - gi
+    return round(rx), round(ry), max(1, round(rw)), max(1, round(rh))
+
+def clients():
+    return [c for c in (hypr_json("clients") or []) if c.get("mapped")]
+
+def ws_clients(ws_name):
+    return [c for c in clients() if str(c["workspace"]["name"]) == str(ws_name)]
+
+def match_class(spec):
+    """A match spec is 'class:<pattern>'. Return the lowercased pattern."""
+    if spec and spec.startswith("class:"):
+        return spec.split(":", 1)[1].lower()
+    return (spec or "").lower()
+
+def client_matches(client, spec):
+    pat = match_class(spec)
+    cls = (client.get("initialClass") or client.get("class") or "").lower()
+    return bool(pat) and (pat == cls or pat in cls)
+
+def guess_exec(cls):
+    key = (cls or "").lower()
+    return CLASS_EXEC.get(key, key or "xterm")
+
+def layout_path(name):
+    return LAYOUT_DIR / f"{name}.json"
+
+def load_layout(name):
+    p = layout_path(name)
+    if not p.exists():
+        die(f"no layout named '{name}' (try: omaspaces list)")
+    try:
+        data = json.loads(p.read_text())
+    except json.JSONDecodeError as e:
+        die(f"layout '{name}' is not valid JSON: {e}")
+    if not data.get("tiles"):
+        die(f"layout '{name}' has no tiles")
+    return data
+
+def save_layout(name, data):
+    LAYOUT_DIR.mkdir(parents=True, exist_ok=True)
+    layout_path(name).write_text(json.dumps(data, indent=2) + "\n")
+
+def cmd_list(args):
+    LAYOUT_DIR.mkdir(parents=True, exist_ok=True)
+    files = sorted(LAYOUT_DIR.glob("*.json"))
+    if getattr(args, "json", False):
+        print(json.dumps([f.stem for f in files if not f.stem.startswith("_")]))
+        return
+    if not files:
+        print("No layouts yet. Arrange a workspace and run:  omaspaces save <name>")
+        return
+    print("Layouts:")
+    for f in files:
+        try:
+            d = json.loads(f.read_text())
+            apps = ", ".join(
+                t.get("exec", "?").split()[0].split("/")[-1] for t in d.get("tiles", [])
+            )
+            print(f"  {f.stem:<16} {len(d.get('tiles', []))} tiles  · {apps}")
+        except json.JSONDecodeError:
+            print(f"  {f.stem:<16} (invalid JSON)")
+
+def cmd_show(args):
+    print(json.dumps(load_layout(args.name), indent=2))
+
+def cmd_edit(args):
+    p = layout_path(args.name)
+    if not p.exists():
+        die(f"no layout named '{args.name}'")
+    editor = os.environ.get("EDITOR", "nvim")
+    subprocess.run([editor, str(p)])
+
+def cmd_rm(args):
+    p = layout_path(args.name)
+    if not p.exists():
+        die(f"no layout named '{args.name}'")
+    p.unlink()
+    print(f"Removed layout '{args.name}'.")
+
+def cmd_save(args):
+    mon = focused_monitor()
+    area = workarea(mon)
+    x0, y0, w, h = area
+    ws = args.workspace or hypr_json("activeworkspace").get("name")
+    windows = sorted(ws_clients(ws), key=lambda c: (c["at"][1], c["at"][0]))
+    if not windows:
+        die(f"workspace '{ws}' has no windows to save")
+    tiles = []
+    for c in windows:
+        ax, ay = c["at"]
+        sw, sh = c["size"]
+        region = [
+            round(max(0.0, (ax - x0) / w), 4),
+            round(max(0.0, (ay - y0) / h), 4),
+            round(min(1.0, sw / w), 4),
+            round(min(1.0, sh / h), 4),
+        ]
+        cls = c.get("initialClass") or c.get("class") or ""
+        tiles.append({"exec": guess_exec(cls), "match": f"class:{cls}", "region": region})
+    save_layout(args.name, {"name": args.name, "tiles": tiles})
+    print(f"Saved layout '{args.name}' — {len(tiles)} tiles from workspace {ws}.")
+    for t in tiles:
+        r = t["region"]
+        print(f"    {t['exec']:<24} [{r[0]:.2f} {r[1]:.2f} {r[2]:.2f} {r[3]:.2f}]")
+    notify("Layout saved", f"'{args.name}' · {len(tiles)} tiles")
+
+def empty_workspace():
+    """Lowest-numbered workspace (1..10) with no windows, else next free id."""
+    occupied = {str(c["workspace"]["name"]) for c in clients()}
+    for i in range(1, 11):
+        if str(i) not in occupied:
+            return i
+    nums = [int(n) for n in occupied if str(n).lstrip("-").isdigit()]
+    return (max(nums) + 1) if nums else 1
+
+def place_windows_lua(placements, target):
+    """Build and run one Lua pass that floats, moves-to-workspace, resizes, and
+    positions every window, then focuses the target workspace.
+
+    placements: list of (address, x, y, w, h). Order matters: resize must run
+    before the absolute move, or the resize re-anchors the window.
+    """
+    lines = [
+        "function()",
+        "  local function P(a,x,y,w,h)",
+        '    hl.dispatch(hl.dsp.window.float({ window=a, action="on" }))',
+        f'    hl.dispatch(hl.dsp.window.move({{ window=a, workspace="{target}", follow=false }}))',
+        "    hl.dispatch(hl.dsp.window.resize({ window=a, x=w, y=h, relative=false }))",
+        "    hl.dispatch(hl.dsp.window.move({ window=a, x=x, y=y, relative=false }))",
+        "  end",
+    ]
+    for addr, x, y, w, h in placements:
+        lines.append(f'  P("address:{addr}",{x},{y},{w},{h})')
+    lines.append(f'  hl.dispatch(hl.dsp.focus({{ workspace="{target}" }}))')
+    lines.append("end")
+    lua("\n".join(lines))
+
+def resolve_target(here=False, workspace=None):
+    if here:
+        return hypr_json("activeworkspace").get("name")
+    if workspace:
+        return workspace
+    return empty_workspace()
+
+def apply_tiles(tiles, target):
+    """Reuse/spawn/place every tile onto `target`. Returns (placed, total)."""
+    mon = focused_monitor()
+    area = workarea(mon)
+
+    existing = ws_clients(target)
+    claimed = set()
+    plan = []  # [tile, address_or_None]
+    to_spawn = []
+    for t in tiles:
+        hit = next(
+            (c for c in existing
+             if c["address"] not in claimed and client_matches(c, t.get("match", ""))),
+            None,
+        )
+        if hit:
+            claimed.add(hit["address"])
+            plan.append([t, hit["address"]])
+        else:
+            plan.append([t, None])
+            to_spawn.append(t)
+
+    before = {c["address"] for c in clients()}
+    for t in to_spawn:
+        exec_cmd(t["exec"])
+
+    if to_spawn:
+        needed = len(to_spawn)
+        deadline = time.time() + 12.0
+        new_windows = []
+        while time.time() < deadline:
+            time.sleep(0.25)
+            new_windows = [c for c in clients() if c["address"] not in before]
+            if len(new_windows) >= needed:
+                break
+        pool = list(new_windows)
+        for entry in plan:
+            if entry[1] is not None:
+                continue
+            t = entry[0]
+            hit = next((c for c in pool if client_matches(c, t.get("match", ""))), None)
+            if hit is None and pool:
+                hit = pool[0]
+            if hit is not None:
+                pool.remove(hit)
+                entry[1] = hit["address"]
+
+    placements = []
+    for t, addr in plan:
+        if addr is None:
+            continue
+        x, y, w, h = tile_rect(t["region"], area)
+        placements.append((addr, x, y, w, h))
+
+    if placements:
+        place_windows_lua(placements, target)
+    else:
+        focus_workspace(target)
+
+    return len(placements), len(tiles)
+
+def cmd_apply(args):
+    data = load_layout(args.name)
+    tiles = data["tiles"]
+    target = resolve_target(args.here, args.workspace)
+
+    if args.dry_run:
+        area = workarea(focused_monitor())
+        print(f"Would apply '{args.name}' to workspace {target}:")
+        for t in tiles:
+            r = tile_rect(t["region"], area)
+            print(f"    {t['exec']:<24} -> {r[2]}x{r[3]} @ {r[0]},{r[1]}")
+        return
+
+    placed, total = apply_tiles(tiles, target)
+    msg = f"'{args.name}' · workspace {target} · {placed}/{total} tiles"
+    if total - placed:
+        msg += f" ({total - placed} didn't launch in time)"
+    print("Applied " + msg)
+    notify("Layout applied", msg)
+
+def clean_exec(ex):
+    ex = re.sub(r"%[fFuUdDnNickvm]", "", ex)  # drop desktop field codes
+    return " ".join(ex.split()).strip()
+
+def scan_apps():
+    dirs = [
+        os.path.expanduser("~/.local/share/applications"),
+        "/usr/share/applications",
+        "/usr/local/share/applications",
+        "/var/lib/flatpak/exports/share/applications",
+        os.path.expanduser("~/.nix-profile/share/applications"),
+    ]
+    seen = {}
+    for d in dirs:
+        for f in sorted(glob.glob(os.path.join(d, "*.desktop"))):
+            try:
+                txt = open(f, encoding="utf-8", errors="ignore").read()
+            except OSError:
+                continue
+            entry = txt.split("\n[", 1)[0]  # [Desktop Entry] section only
+
+            def field(k, e=entry):
+                m = re.search(rf"^{k}=(.*)$", e, re.M)
+                return m.group(1).strip() if m else ""
+
+            if field("Type") not in ("", "Application"):
+                continue
+            if field("NoDisplay").lower() == "true" or field("Hidden").lower() == "true":
+                continue
+            name, ex = field("Name"), clean_exec(field("Exec"))
+            if not name or not ex:
+                continue
+            wm = field("StartupWMClass")
+            app_id = os.path.splitext(os.path.basename(f))[0]
+            seen.setdefault(name, {"id": app_id, "name": name, "exec": ex,
+                                   "wmclass": wm, "icon": field("Icon")})
+    return sorted(seen.values(), key=lambda a: a["name"].lower())
+
+DOCK_JSON = DATA_DIR / "dock.json"
+
+def read_pins():
+    if DOCK_JSON.exists():
+        try:
+            return json.loads(DOCK_JSON.read_text()).get("pins", [])
+        except (json.JSONDecodeError, OSError):
+            return []
+    have = {a["id"] for a in scan_apps()}
+    prefer = ["google-chrome", "chromium", "brave-browser", "foot", "Alacritty",
+              "org.gnome.Nautilus", "code", "obsidian", "spotify", "org.telegram.desktop"]
+    pins = [p for p in prefer if p in have][:6]
+    write_pins(pins)
+    return pins
+
+def write_pins(pins):
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DOCK_JSON.write_text(json.dumps({"pins": pins}, indent=2) + "\n")
+
+def current_theme_dir():
+    name = subprocess.run(["omarchy", "theme", "current"], capture_output=True,
+                          text=True).stdout.strip()
+    slug = name.lower().replace(" ", "-")
+    for base in (os.path.expanduser("~/.config/omarchy/themes"),
+                 "/usr/share/omarchy/themes"):
+        d = Path(base) / slug
+        if (d / "colors.toml").exists():
+            return d
+    return None
+
+def theme_payload():
+    colors, mode = {}, "dark"
+    d = current_theme_dir()
+    if d:
+        txt = (d / "colors.toml").read_text()
+        try:
+            import tomllib
+            colors = tomllib.loads(txt)
+        except Exception:
+            for m in re.finditer(r'^(\w+)\s*=\s*"([^"]*)"', txt, re.M):
+                colors[m.group(1)] = m.group(2)
+        mode = colors.get("mode", "dark")
+    font = subprocess.run(["omarchy", "font", "current"], capture_output=True,
+                          text=True).stdout.strip() or "monospace"
+    return {"colors": colors, "font": font, "mode": mode}
+
+def _make_handler():
+    import http.server
+    import urllib.parse
+
+    def read_json_body(h):
+        length = int(h.headers.get("Content-Length", 0))
+        return json.loads(h.rfile.read(length) or b"{}")
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass  # quiet
+
+        def _send(self, code, body, ctype="application/json"):
+            data = body if isinstance(body, bytes) else json.dumps(body).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            u = urllib.parse.urlparse(self.path)
+            q = urllib.parse.parse_qs(u.query)
+            if u.path in ("/", "/index.html"):
+                if not BUILDER_HTML.exists():
+                    return self._send(500, b"builder.html missing", "text/plain")
+                return self._send(200, BUILDER_HTML.read_bytes(), "text/html; charset=utf-8")
+            if u.path == "/api/monitor":
+                mon = focused_monitor()
+                scale = mon.get("scale", 1.0) or 1.0
+                gi, go = gaps()
+                return self._send(200, {
+                    "name": mon["name"],
+                    "lw": round(mon["width"] / scale),
+                    "lh": round(mon["height"] / scale),
+                    "reserved": mon.get("reserved") or [0, 0, 0, 0],
+                    "gaps_in": gi, "gaps_out": go,
+                })
+            if u.path == "/api/apps":
+                return self._send(200, scan_apps())
+            if u.path == "/api/theme":
+                return self._send(200, theme_payload())
+            if u.path == "/api/layouts":
+                LAYOUT_DIR.mkdir(parents=True, exist_ok=True)
+                names = [p.stem for p in sorted(LAYOUT_DIR.glob("*.json"))
+                         if not p.stem.startswith("_")]
+                return self._send(200, names)
+            if u.path == "/api/layout":
+                name = (q.get("name") or [""])[0]
+                p = layout_path(name)
+                if not p.exists():
+                    return self._send(404, {"error": "not found"})
+                return self._send(200, json.loads(p.read_text()))
+            return self._send(404, {"error": "not found"})
+
+        def do_POST(self):
+            u = urllib.parse.urlparse(self.path)
+            try:
+                body = read_json_body(self)
+            except (ValueError, json.JSONDecodeError):
+                return self._send(400, {"error": "bad json"})
+            if u.path == "/api/save":
+                name = (body.get("name") or "").strip()
+                tiles = body.get("tiles") or []
+                if not name or not tiles:
+                    return self._send(400, {"error": "name and tiles required"})
+                save_layout(name, {"name": name, "tiles": tiles})
+                return self._send(200, {"ok": True, "name": name})
+            if u.path == "/api/apply":
+                tiles = body.get("tiles") or []
+                if not tiles:
+                    return self._send(400, {"error": "tiles required"})
+                name = (body.get("name") or "").strip()
+                if name:
+                    save_layout(name, {"name": name, "tiles": tiles})
+                target = resolve_target(here=(body.get("mode") == "here"))
+                placed, total = apply_tiles(tiles, target)
+                return self._send(200, {"placed": placed, "total": total, "target": target})
+            if u.path == "/api/quit":
+                self._send(200, {"ok": True})
+                if BUILDER_PROC is not None:
+                    try:
+                        BUILDER_PROC.terminate()
+                    except Exception:
+                        pass
+                return
+            return self._send(404, {"error": "not found"})
+
+    return Handler
+
+def _app_window_cmd(url):
+    """A chromeless, isolated app window so it reads as a native dialog and its
+    lifetime (which we wait on) matches the window's, not the shared browser."""
+    prof = DATA_DIR / "chrome-profile"
+    prof.mkdir(parents=True, exist_ok=True)
+    for browser in ("chromium", "google-chrome-stable", "brave"):
+        if shutil.which(browser):
+            return [
+                browser, f"--app={url}", "--class=omaspaces-builder",
+                f"--user-data-dir={prof}", "--no-first-run",
+                "--no-default-browser-check", "--window-size=1180,780",
+            ]
+    return None
+
+def cmd_build(args):
+    """Open the workspace builder: native Quickshell editor by default, or the
+    web builder with --web."""
+    if getattr(args, "web", False):
+        return cmd_build_web(args)
+    if not shutil.which("qs"):
+        print("Quickshell (qs) not found; falling back to the web builder.")
+        return cmd_build_web(args)
+    if not (QML_DIR / "shell.qml").exists():
+        die(f"native editor not found at {QML_DIR}/shell.qml")
+    subprocess.run(["qs", "-p", str(QML_DIR)])
+
+def cmd_build_web(args):
+    global BUILDER_PROC
+    import http.server
+    import threading
+
+    if not BUILDER_HTML.exists():
+        die(f"builder UI not found at {BUILDER_HTML}")
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", args.port), _make_handler())
+    url = f"http://127.0.0.1:{httpd.server_address[1]}/"
+
+    server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    server_thread.start()
+    print(f"omaspaces builder → {url}")
+
+    app_cmd = None if args.tab else _app_window_cmd(url)
+    if app_cmd:
+        notify("Workspace builder", "Design a workspace, then Save & Close")
+        BUILDER_PROC = subprocess.Popen(app_cmd, stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.DEVNULL)
+        try:
+            BUILDER_PROC.wait()
+        except KeyboardInterrupt:
+            BUILDER_PROC.terminate()
+        finally:
+            httpd.shutdown()
+    else:
+        try:
+            subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        except OSError:
+            pass
+        print("Serving in a browser tab. Ctrl+C to stop.")
+        try:
+            server_thread.join()
+        except KeyboardInterrupt:
+            httpd.shutdown()
+
+def cmd_menu(args):
+    """Native picker: choose a saved layout to open, or launch the builder."""
+    LAYOUT_DIR.mkdir(parents=True, exist_ok=True)
+    names = [p.stem for p in sorted(LAYOUT_DIR.glob("*.json")) if not p.stem.startswith("_")]
+    NEW_LABEL = "Build a new workspace…"
+    options = []
+    for n in names:
+        try:
+            tc = len(json.loads(layout_path(n).read_text()).get("tiles", []))
+        except Exception:
+            tc = 0
+        options.append(f"\t{n}\t{tc} tiles")
+    options.append(f"\t{NEW_LABEL}")
+
+    if args.print:
+        print("\n".join(o.replace("\t", "  ·  ") for o in options) or "(no layouts)")
+        return
+
+    res = subprocess.run(
+        ["omarchy-menu-select", "Open workspace", *options, "--", "--width", "460"],
+        capture_output=True, text=True,
+    )
+    if res.returncode != 0:
+        return
+    choice = res.stdout.strip()
+    label = choice.split("\t")[0]
+    if label == NEW_LABEL:
+        cmd_build(argparse.Namespace(port=8787, tab=False, web=False))
+        return
+    if label in names:
+        tiles = load_layout(label)["tiles"]
+        target = resolve_target()
+        placed, total = apply_tiles(tiles, target)
+        notify("Workspace", f"{label} · {placed}/{total} tiles · ws {target}")
+
+def cmd_import(args):
+    """Read a layout as JSON from a file, stdin, or the Wayland clipboard."""
+    if args.file and args.file != "-":
+        raw = Path(args.file).read_text()
+    elif not sys.stdin.isatty():
+        raw = sys.stdin.read()
+    elif shutil.which("wl-paste"):
+        raw = subprocess.run(["wl-paste"], capture_output=True, text=True).stdout
+    else:
+        die("no input: pass a file, pipe JSON in, or copy JSON to the clipboard")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        die(f"input is not valid JSON: {e}")
+    tiles = data.get("tiles")
+    if not tiles:
+        die("JSON has no 'tiles'")
+    out = {"name": args.name, "tiles": tiles}
+    if isinstance(data.get("tree"), dict):
+        out["tree"] = data["tree"]
+    save_layout(args.name, out)
+    print(f"Imported layout '{args.name}' — {len(tiles)} tiles.")
+
+def cmd_apps(args):
+    apps = scan_apps()
+    if getattr(args, "json", False):
+        print(json.dumps(apps))
+        return
+    for a in apps:
+        cls = a["wmclass"] or "(derives from exec)"
+        print(f"  {a['name']:<32} {a['exec']:<30} class:{cls}")
+
+def cmd_theme(args):
+    print(json.dumps(theme_payload()))
+
+def cmd_dock(args):
+    """Run the persistent native dock, or manage its pinned apps."""
+    action = getattr(args, "action", None)
+    if action == "pins":
+        print(json.dumps(read_pins()))
+        return
+    if action == "pin":
+        if not args.arg:
+            die("usage: omaspaces dock pin <app-id>")
+        pins = read_pins()
+        if args.arg not in pins:
+            pins.append(args.arg)
+            write_pins(pins)
+        return
+    if action == "unpin":
+        write_pins([p for p in read_pins() if p != args.arg])
+        return
+    if action == "add":
+        apps = scan_apps()
+        opts = [f"\t{a['name']}\t{a['id']}" for a in apps]
+        res = subprocess.run(["omarchy-menu-select", "Pin app", *opts, "--", "--width", "460"],
+                             capture_output=True, text=True)
+        if res.returncode != 0:
+            return
+        parts = res.stdout.strip().split("\t")
+        if len(parts) >= 2:
+            cmd_dock(argparse.Namespace(action="pin", arg=parts[-1], stop=False, force=False))
+        return
+
+    if args.stop:
+        subprocess.run(["pkill", "-f", "qs -p .*qml-dock"])
+        return
+    if not shutil.which("qs"):
+        die("Quickshell (qs) not found")
+    if not (DOCK_QML_DIR / "shell.qml").exists():
+        die(f"dock UI not found at {DOCK_QML_DIR}/shell.qml")
+    if subprocess.run(["pgrep", "-f", "qs -p .*qml-dock"], capture_output=True).returncode == 0 and not args.force:
+        print("dock already running (use --stop, or --force to start another).")
+        return
+    subprocess.run(["qs", "-p", str(DOCK_QML_DIR)])
+
+def main():
+    p = argparse.ArgumentParser(prog="omaspaces", description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd")
+
+    sp = sub.add_parser("list", help="list saved layouts")
+    sp.add_argument("--json", action="store_true", help="emit JSON names (used by the native editor)")
+    sp.set_defaults(func=cmd_list)
+
+    sp = sub.add_parser("save", help="snapshot the current workspace as a layout")
+    sp.add_argument("name")
+    sp.add_argument("--workspace", help="save a specific workspace instead of the active one")
+    sp.set_defaults(func=cmd_save)
+
+    sp = sub.add_parser("apply", help="build a layout in a workspace")
+    sp.add_argument("name")
+    g = sp.add_mutually_exclusive_group()
+    g.add_argument("--new", action="store_true", help="use a fresh empty workspace (default)")
+    g.add_argument("--here", action="store_true", help="rebuild on the current workspace")
+    g.add_argument("--workspace", help="target a specific workspace id")
+    sp.add_argument("--dry-run", action="store_true", help="print the plan without touching windows")
+    sp.set_defaults(func=cmd_apply)
+
+    sp = sub.add_parser("show", help="print a layout file")
+    sp.add_argument("name")
+    sp.set_defaults(func=cmd_show)
+
+    sp = sub.add_parser("edit", help="open a layout in $EDITOR")
+    sp.add_argument("name")
+    sp.set_defaults(func=cmd_edit)
+
+    sp = sub.add_parser("rm", help="delete a layout")
+    sp.add_argument("name")
+    sp.set_defaults(func=cmd_rm)
+
+    sp = sub.add_parser("build", help="open the visual workspace builder (native Quickshell editor)")
+    sp.add_argument("--web", action="store_true", help="use the web builder instead of the native editor")
+    sp.add_argument("--port", type=int, default=8787, help="web builder port (default 8787)")
+    sp.add_argument("--tab", action="store_true", help="web builder: open a plain browser tab")
+    sp.set_defaults(func=cmd_build)
+
+    sp = sub.add_parser("menu", help="native picker: open a saved workspace or build a new one")
+    sp.add_argument("--print", action="store_true", help="print options instead of showing the menu")
+    sp.set_defaults(func=cmd_menu)
+
+    sp = sub.add_parser("import", help="save a layout from JSON (file, stdin, or clipboard)")
+    sp.add_argument("name")
+    sp.add_argument("file", nargs="?", help="JSON file, or '-' for stdin (default: clipboard)")
+    sp.set_defaults(func=cmd_import)
+
+    sp = sub.add_parser("apps", help="list installed apps the builder can place")
+    sp.add_argument("--json", action="store_true", help="emit JSON (used by the native editor)")
+    sp.set_defaults(func=cmd_apps)
+
+    sp = sub.add_parser("theme", help="print the active Omarchy theme palette + font as JSON")
+    sp.set_defaults(func=cmd_theme)
+
+    sp = sub.add_parser("dock", help="run the native dock, or manage pinned apps")
+    sp.add_argument("action", nargs="?", choices=["pin", "unpin", "pins", "add"],
+                    help="pin/unpin an app id, list pins, or add (pick an app to pin)")
+    sp.add_argument("arg", nargs="?", help="app id for pin/unpin")
+    sp.add_argument("--stop", action="store_true", help="stop the running dock")
+    sp.add_argument("--force", action="store_true", help="start even if one seems to be running")
+    sp.set_defaults(func=cmd_dock)
+
+    args = p.parse_args()
+    if not getattr(args, "cmd", None):
+        p.print_help()
+        return
+    args.func(args)
+
+if __name__ == "__main__":
+    main()

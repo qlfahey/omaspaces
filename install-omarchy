@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# omaspaces installer for Omarchy / Hyprland.
+# Installs to ~/.local (no root), mirroring the omasnap install flow:
+# resolves missing dependencies via Omarchy's package helper, copies the tool
+# and its Quickshell UI into place, and prints the keybindings to add.
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+BIN="$HOME/.local/bin"
+SHARE="$HOME/.local/share/omaspaces"
+APPS="$HOME/.local/share/applications"
+
+say() { printf '\033[38;5;208m▪\033[0m %s\n' "$*"; }
+
+# --- dependencies ----------------------------------------------------------
+declare -A pkg=(
+  [qs]=quickshell [inotifywait]=inotify-tools [wl-paste]=wl-clipboard
+  [grim]=grim [jq]=jq [python3]=python [hyprctl]=hyprland
+)
+missing=()
+for c in python3 qs jq grim hyprctl inotifywait wl-paste; do
+  command -v "$c" >/dev/null 2>&1 || missing+=("$c")
+done
+if ((${#missing[@]})); then
+  pkgs=(); for c in "${missing[@]}"; do pkgs+=("${pkg[$c]:-$c}"); done
+  say "Installing missing dependencies: ${pkgs[*]}"
+  if command -v omarchy >/dev/null 2>&1; then
+    omarchy pkg add "${pkgs[@]}" || sudo pacman -S --needed "${pkgs[@]}"
+  else
+    sudo pacman -S --needed "${pkgs[@]}"
+  fi
+fi
+
+# --- install ---------------------------------------------------------------
+mkdir -p "$BIN" "$SHARE" "$APPS"
+install -m755 "$here/bin/omaspaces" "$BIN/omaspaces"
+rm -rf "$SHARE/qml" "$SHARE/qml-dock" "$SHARE/qml-overview"
+cp -r "$here/share/qml" "$here/share/qml-dock" "$SHARE/"
+cp "$here/share/builder.html" "$SHARE/builder.html"
+[ -f "$here/omaspaces.desktop" ] && install -m644 "$here/omaspaces.desktop" "$APPS/omaspaces.desktop"
+
+say "Installed omaspaces → $BIN/omaspaces"
+
+case ":$PATH:" in
+  *":$BIN:"*) ;;
+  *) say "Note: add $BIN to your PATH." ;;
+esac
+
+cat <<'EOF'
+
+  Add these to your Hyprland config, then `hyprctl reload`:
+
+    ~/.config/hypr/bindings.lua
+      o.bind("SUPER + ALT + W", "Workspaces", "omaspaces menu")
+
+    ~/.config/hypr/autostart.lua   (persistent dock)
+      o.launch_on_start("omaspaces dock")
+
+  Try it now:
+      omaspaces build      # design a workspace
+      omaspaces dock       # start the dock
+      omaspaces --help
+EOF
