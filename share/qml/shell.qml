@@ -50,6 +50,41 @@ ShellRoot {
     stdout: StdioCollector { id: appsOut; waitForEnd: true }
     onExited: { try { app.apps = JSON.parse(appsOut.text) } catch (e) { app.apps = [] } }
   }
+
+  // Real work-area constraints in logical px, matching how `omaspaces apply` sizes tiles
+  // (monitor logical size − reserved − 2·gaps_out; each tile inset by gaps_in).
+  property real cW: 1516
+  property real cH: 740
+  property int cGi: 5
+  property int cBs: 2
+  property int minTile: 160
+  property int sizeStep: 32
+  property bool cReady: false
+  function firstInt(s, d) { var m = String(s).match(/-?\d+/); return m ? parseInt(m[0]) : d }
+  Process {
+    command: ["bash", "-lc",
+      "hyprctl monitors -j | jq -r '(([.[]|select(.focused)][0]) // .[0])|(.width,.height,.scale,.reserved[0],.reserved[1],.reserved[2],.reserved[3])'; " +
+      "hyprctl getoption general:gaps_in -j | jq -r '.css // .int // 5'; " +
+      "hyprctl getoption general:gaps_out -j | jq -r '.css // .int // 10'; " +
+      "hyprctl getoption general:border_size -j | jq -r '.int // 2'"]
+    running: true
+    stdout: StdioCollector { id: consOut; waitForEnd: true }
+    onExited: {
+      var lines = (consOut.text || "").trim().split("\n")
+      if (lines.length < 10) return
+      var scale = parseFloat(lines[2]) || 1
+      var lw = Math.round(app.firstInt(lines[0], 1920) / scale)
+      var lh = Math.round(app.firstInt(lines[1], 1080) / scale)
+      var rl = app.firstInt(lines[3], 0), rt = app.firstInt(lines[4], 0)
+      var rr = app.firstInt(lines[5], 0), rb = app.firstInt(lines[6], 0)
+      var gi = app.firstInt(lines[7], 5), go = app.firstInt(lines[8], 10)
+      app.cGi = gi; app.cBs = app.firstInt(lines[9], 2)
+      app.cW = Math.max(200, lw - rl - rr - 2 * go)
+      app.cH = Math.max(200, lh - rt - rb - 2 * go)
+      app.cReady = true
+    }
+  }
+
   function matches() {
     if (!filter) return apps
     var f = filter.toLowerCase()
@@ -108,6 +143,43 @@ ShellRoot {
     })(tree, 0, 0, 1, 1)
     return out
   }
+  // Constraint-aware helpers: fraction → real tile pixels, min-size clamping, per-tile resize.
+  function pxW(fw) { return Math.max(1, Math.round(fw * cW - cGi)) }
+  function pxH(fh) { return Math.max(1, Math.round(fh * cH - cGi)) }
+  function clampR(vertical, boxExtentFrac, r) {
+    var extentPx = boxExtentFrac * (vertical ? cW : cH)
+    var minR = (minTile + cGi) / extentPx
+    if (!(minR < 0.5)) minR = 0.5
+    return Math.max(minR, Math.min(1 - minR, r))
+  }
+  function pathTo(id) {
+    var out = null
+    ;(function rec(n, acc) {
+      if (!n || out) return
+      if (n.id === id) { out = acc; return }
+      if (isLeaf(n)) return
+      rec(n.a, acc.concat([{ node: n, side: "a" }]))
+      rec(n.b, acc.concat([{ node: n, side: "b" }]))
+    })(tree, [])
+    return out || []
+  }
+  function canResize(axis) {
+    var want = axis === "w" ? "v" : "h", path = pathTo(sel)
+    for (var i = 0; i < path.length; i++) if (path[i].node.split === want) return true
+    return false
+  }
+  function resizeSel(axis, deltaPx) {
+    if (!sel || !tree) return
+    var want = axis === "w" ? "v" : "h", path = pathTo(sel), anc = null
+    for (var i = path.length - 1; i >= 0; i--) if (path[i].node.split === want) { anc = path[i]; break }
+    if (!anc) return
+    var box = rect(anc.node.id); if (!box) return
+    var extentFrac = want === "v" ? box.w : box.h
+    var dR = deltaPx / (extentFrac * (want === "v" ? cW : cH))
+    anc.node.ratio = clampR(want === "v", extentFrac, anc.node.ratio + (anc.side === "a" ? dR : -dR))
+    touch()
+  }
+  function selRect() { return sel ? rect(sel) : null }
   function firstLeaf(n) { return isLeaf(n) ? n.id : firstLeaf(n.a) }
   function setTree(t) { tree = t; sel = firstLeaf(t); touch() }
 
@@ -358,6 +430,28 @@ ShellRoot {
               MouseArea { id: ttMa; anchors.fill: parent; hoverEnabled: true; onClicked: modelData[0] === "rm" ? app.remove() : app.split(modelData[0]) }
             }
           }
+          Item { width: 6; height: 1 }
+          Row {
+            spacing: 5; visible: !!app.sel && app.cReady
+            anchors.verticalCenter: parent.verticalCenter
+            Text { text: "W"; color: app.cDim; font.family: app.uiFont; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
+            Rectangle { width: 26; height: 28; radius: 7; color: wmMa.containsMouse ? app.cPanel2 : app.cPanel; border.color: app.cLine; border.width: 1; opacity: app.canResize("w") ? 1 : 0.35
+              Text { anchors.centerIn: parent; text: "−"; color: app.cInk; font.family: app.uiFont; font.pixelSize: 15 }
+              MouseArea { id: wmMa; anchors.fill: parent; hoverEnabled: true; onClicked: app.resizeSel("w", -app.sizeStep) } }
+            Text { width: 54; horizontalAlignment: Text.AlignHCenter; text: (app.rev, app.sel && app.selRect()) ? app.pxW(app.selRect().w) + "px" : "—"; color: app.cInk; font.family: app.uiFont; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
+            Rectangle { width: 26; height: 28; radius: 7; color: wpMa.containsMouse ? app.cPanel2 : app.cPanel; border.color: app.cLine; border.width: 1; opacity: app.canResize("w") ? 1 : 0.35
+              Text { anchors.centerIn: parent; text: "+"; color: app.cInk; font.family: app.uiFont; font.pixelSize: 14 }
+              MouseArea { id: wpMa; anchors.fill: parent; hoverEnabled: true; onClicked: app.resizeSel("w", app.sizeStep) } }
+            Item { width: 8; height: 1 }
+            Text { text: "H"; color: app.cDim; font.family: app.uiFont; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
+            Rectangle { width: 26; height: 28; radius: 7; color: hmMa.containsMouse ? app.cPanel2 : app.cPanel; border.color: app.cLine; border.width: 1; opacity: app.canResize("h") ? 1 : 0.35
+              Text { anchors.centerIn: parent; text: "−"; color: app.cInk; font.family: app.uiFont; font.pixelSize: 15 }
+              MouseArea { id: hmMa; anchors.fill: parent; hoverEnabled: true; onClicked: app.resizeSel("h", -app.sizeStep) } }
+            Text { width: 54; horizontalAlignment: Text.AlignHCenter; text: (app.rev, app.sel && app.selRect()) ? app.pxH(app.selRect().h) + "px" : "—"; color: app.cInk; font.family: app.uiFont; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
+            Rectangle { width: 26; height: 28; radius: 7; color: hpMa.containsMouse ? app.cPanel2 : app.cPanel; border.color: app.cLine; border.width: 1; opacity: app.canResize("h") ? 1 : 0.35
+              Text { anchors.centerIn: parent; text: "+"; color: app.cInk; font.family: app.uiFont; font.pixelSize: 14 }
+              MouseArea { id: hpMa; anchors.fill: parent; hoverEnabled: true; onClicked: app.resizeSel("h", app.sizeStep) } }
+          }
         }
 
         Rectangle {
@@ -367,7 +461,7 @@ ShellRoot {
           Item {
             id: canvas
             anchors.centerIn: parent
-            property real aspect: 16 / 9
+            property real aspect: app.cReady ? app.cW / app.cH : 16 / 9
             width: Math.min(parent.width - 24, (parent.height - 24) * aspect)
             height: width / aspect
 
@@ -384,7 +478,8 @@ ShellRoot {
                 Column {
                   anchors.centerIn: parent; spacing: 4
                   Text { anchors.horizontalCenter: parent.horizontalCenter; text: d.app ? d.app.label : "empty"; color: d.app ? app.cInk : app.cDim; font.family: app.uiFont; font.pixelSize: 13; font.bold: !!d.app; font.italic: !d.app }
-                  Text { anchors.horizontalCenter: parent.horizontalCenter; text: Math.round(d.w * 100) + "% × " + Math.round(d.h * 100) + "%"; color: app.cDim; font.family: app.uiFont; font.pixelSize: 11 }
+                  Text { anchors.horizontalCenter: parent.horizontalCenter; text: (app.rev, app.cReady) ? app.pxW(d.w) + " × " + app.pxH(d.h) + " px" : Math.round(d.w * 100) + "% × " + Math.round(d.h * 100) + "%"; color: app.cInk; font.family: app.uiFont; font.pixelSize: 11 }
+                  Text { anchors.horizontalCenter: parent.horizontalCenter; text: Math.round(d.w * 100) + "% × " + Math.round(d.h * 100) + "%"; color: app.cDim; font.family: app.uiFont; font.pixelSize: 10 }
                 }
                 MouseArea { anchors.fill: parent; onClicked: { app.sel = d.id; app.touch() } }
               }
@@ -409,7 +504,7 @@ ShellRoot {
                     var box = app.rect(dv.node.id)
                     if (!box) return
                     var r = dv.vertical ? (p.x / canvas.width - box.x) / box.w : (p.y / canvas.height - box.y) / box.h
-                    dv.node.ratio = Math.max(0.1, Math.min(0.9, r))
+                    dv.node.ratio = app.clampR(dv.vertical, dv.vertical ? box.w : box.h, r)
                     app.touch()
                   }
                 }

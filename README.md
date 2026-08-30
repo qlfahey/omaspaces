@@ -13,7 +13,11 @@ and mouse-driven, with a small CLI behind it.
 
 - **Editor** — a native visual builder. Pick a template, split tiles, drag the
   dividers, drop an app in each, and **Save & Apply** to build it on a fresh
-  workspace. Reopen any saved space with **Load** and edit it exactly.
+  workspace. Tile sizes are shown in **real pixels** for your monitor — the
+  canvas matches the actual work area (minus the bar and gaps), and resizing (drag
+  a divider or use the **W/H** steppers on the selected tile) is clamped to a
+  usable minimum so a layout can't produce unusable slivers. Reopen any saved
+  space with **Load** and edit it exactly.
 - **Dock** — a macOS-style dock: pinned + running apps (icons, running dots,
   hover-magnify; click to launch or focus, right-click to pin/unpin), your saved
   layouts as pills, and a button to build a new space.
