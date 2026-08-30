@@ -248,6 +248,17 @@ ShellRoot {
     if (close) Qt.quit()
   }
 
+  // Capture the workspace you arranged by hand into a reusable preset (exact regions).
+  property string status: ""
+  Timer { id: statusClear; interval: 2600; onTriggered: app.status = "" }
+  Timer { id: listRefresh; interval: 600; onTriggered: listProc.running = true }
+  function captureCurrent(name) {
+    if (!name) { nameField.forceActiveFocus(); app.status = "Name it, then Capture"; statusClear.restart(); return }
+    Quickshell.execDetached(["omaspaces", "save", name])
+    app.status = "Captured current windows as '" + name + "'"
+    statusClear.restart(); listRefresh.restart()
+  }
+
   property var layoutNames: []
   property bool showLoad: false
   Process {
@@ -311,6 +322,7 @@ ShellRoot {
         case Qt.Key_5: app.setTree(app.template("grid")); break
         case Qt.Key_A: case Qt.Key_Slash: app.pick = 0; search.forceActiveFocus(); break
         case Qt.Key_N: nameField.forceActiveFocus(); break
+        case Qt.Key_C: app.captureCurrent(nameField.text.trim()); break
         case Qt.Key_L: app.showLoad = !app.showLoad; if (app.showLoad) listProc.running = true; break
         default: return
         }
@@ -333,7 +345,7 @@ ShellRoot {
           anchors { top: parent.top; left: parent.left; right: parent.right }
           height: 58
           Text { text: "Workspace Builder"; color: app.cInk; font.family: app.uiFont; font.pixelSize: 17; font.bold: true; anchors { left: parent.left; leftMargin: 22; verticalCenter: parent.verticalCenter } }
-          Text { text: "arrows select · v/h split · a app · Ctrl+Enter apply · Esc"; color: app.cDim; font.family: app.uiFont; font.pixelSize: 12; anchors { left: parent.left; leftMargin: 210; verticalCenter: parent.verticalCenter } }
+          Text { text: "arrows select · v/h split · a app · c capture current · Ctrl+Enter apply · Esc"; color: app.cDim; font.family: app.uiFont; font.pixelSize: 12; anchors { left: parent.left; leftMargin: 210; verticalCenter: parent.verticalCenter } }
           Rectangle {
             id: loadBtn
             anchors { right: parent.right; rightMargin: 20; verticalCenter: parent.verticalCenter }
@@ -534,9 +546,19 @@ ShellRoot {
               Text { anchors.fill: parent; verticalAlignment: Text.AlignVCenter; visible: nameField.text === ""; text: "workspace name"; color: app.cDim; font.family: app.uiFont; font.pixelSize: 13 }
             }
           }
+          Text {
+            anchors { left: parent.left; leftMargin: 258; verticalCenter: parent.verticalCenter }
+            width: 320; elide: Text.ElideRight
+            text: app.status; color: app.cAccent; font.family: app.uiFont; font.pixelSize: 12; visible: app.status !== ""
+          }
           Row {
             anchors { right: parent.right; rightMargin: 18; verticalCenter: parent.verticalCenter }
             spacing: 8
+            Rectangle {
+              width: capTxt.width + 24; height: 34; radius: 8; color: capMa.containsMouse ? app.cPanel2 : app.cPanel; border.color: app.cLine; border.width: 1
+              Text { id: capTxt; anchors.centerIn: parent; text: "Capture current"; color: app.cInk; font.family: app.uiFont; font.pixelSize: 13 }
+              MouseArea { id: capMa; anchors.fill: parent; hoverEnabled: true; onClicked: app.captureCurrent(nameField.text.trim()) }
+            }
             Rectangle {
               width: saveTxt.width + 24; height: 34; radius: 8; color: saveMa.containsMouse ? app.cPanel2 : app.cPanel; border.color: app.cLine; border.width: 1
               Text { id: saveTxt; anchors.centerIn: parent; text: "Save"; color: app.cInk; font.family: app.uiFont; font.pixelSize: 13 }

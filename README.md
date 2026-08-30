@@ -17,7 +17,9 @@ and mouse-driven, with a small CLI behind it.
   canvas matches the actual work area (minus the bar and gaps), and resizing (drag
   a divider or use the **W/H** steppers on the selected tile) is clamped to a
   usable minimum so a layout can't produce unusable slivers. Reopen any saved
-  space with **Load** and edit it exactly.
+  space with **Load** and edit it exactly. Already arranged a workspace by hand
+  and want to keep it? Hit **Capture current** (or press `c`) to snapshot the live
+  workspace into a named, reusable preset — no rebuilding it in the editor.
 - **Dock** — a macOS-style dock: pinned + running apps (icons, running dots,
   hover-magnify; click to launch or focus, right-click to pin/unpin), your saved
   layouts as pills, and a button to build a new space.
