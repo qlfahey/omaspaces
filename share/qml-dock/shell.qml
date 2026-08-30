@@ -161,24 +161,6 @@ ShellRoot {
         spacing: 6
 
         Repeater {
-          model: app.workspaceIds()
-          delegate: Rectangle {
-            property int wid: modelData
-            property var ws: app.workspaceById(wid)
-            property bool wfocused: Hyprland.focusedWorkspace && Hyprland.focusedWorkspace.id === wid
-            property bool woccupied: ws && ws.toplevels.values.length > 0
-            width: 30; height: 34; radius: 9
-            anchors.verticalCenter: parent.verticalCenter
-            color: wfocused ? app.cAccent : (wsm.containsMouse ? app.cPanel2 : "transparent")
-            border.color: app.cLine; border.width: wfocused ? 0 : 1
-            opacity: (woccupied || wfocused) ? 1 : 0.45
-            Text { anchors.centerIn: parent; text: String(wid); color: wfocused ? "#0b0b0b" : app.cInk; font.family: app.uiFont; font.pixelSize: 13; font.bold: wfocused }
-            MouseArea { id: wsm; anchors.fill: parent; hoverEnabled: true; onClicked: app.focusWorkspace(wid) }
-          }
-        }
-        Rectangle { width: 1; height: 34; color: app.cLine; anchors.verticalCenter: parent.verticalCenter }
-
-        Repeater {
           model: (app.pins, ToplevelManager.toplevels.values, app.dockItems())
           delegate: Item {
             id: appItem
@@ -244,26 +226,19 @@ ShellRoot {
         Rectangle { width: 1; height: 34; color: app.cLine; anchors.verticalCenter: parent.verticalCenter }
 
         Repeater {
-          model: app.layoutNames
+          model: app.workspaceIds()
           delegate: Rectangle {
-            height: 34; radius: 10; width: lrow.width + 22
+            property int wid: modelData
+            property var ws: app.workspaceById(wid)
+            property bool wfocused: Hyprland.focusedWorkspace && Hyprland.focusedWorkspace.id === wid
+            property bool woccupied: ws && ws.toplevels.values.length > 0
+            width: 34; height: 34; radius: 10
             anchors.verticalCenter: parent.verticalCenter
-            color: lm.containsMouse ? app.cPanel2 : "transparent"
-            border.color: app.cLine; border.width: 1
-            Row {
-              id: lrow; anchors.centerIn: parent; spacing: 6
-              Text { text: "\uf0db"; color: app.cAccent; font.family: app.uiFont; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
-              Text { text: modelData; color: app.cInk; font.family: app.uiFont; font.pixelSize: 13; anchors.verticalCenter: parent.verticalCenter }
-            }
-            MouseArea { id: lm; anchors.fill: parent; hoverEnabled: true; onClicked: app.applyLayout(modelData) }
-            Rectangle {
-              visible: lm.containsMouse
-              anchors { top: parent.top; right: parent.right; topMargin: 2; rightMargin: 2 }
-              width: 15; height: 15; radius: 8
-              color: app.cPanel2; border.color: app.cLine; border.width: 1
-              Text { anchors.centerIn: parent; text: "×"; color: app.cInk; font.family: app.uiFont; font.pixelSize: 11 }
-              MouseArea { anchors.fill: parent; onClicked: app.removeLayout(modelData) }
-            }
+            color: wfocused ? app.cAccent : (wsm.containsMouse ? app.cPanel2 : "transparent")
+            border.color: app.cLine; border.width: wfocused ? 0 : 1
+            opacity: (woccupied || wfocused) ? 1 : 0.5
+            Text { anchors.centerIn: parent; text: String(wid); color: wfocused ? "#0b0b0b" : app.cInk; font.family: app.uiFont; font.pixelSize: 14; font.bold: wfocused }
+            MouseArea { id: wsm; anchors.fill: parent; hoverEnabled: true; onClicked: app.focusWorkspace(wid) }
           }
         }
 
