@@ -258,6 +258,10 @@ ShellRoot {
     app.status = "Captured current windows as '" + name + "'"
     statusClear.restart(); listRefresh.restart()
   }
+  function removeLayout(name) {
+    Quickshell.execDetached(["omaspaces", "rm", name])
+    app.status = "Deleted '" + name + "'"; statusClear.restart(); listRefresh.restart()
+  }
 
   property var layoutNames: []
   property bool showLoad: false
@@ -583,8 +587,15 @@ ShellRoot {
             model: app.layoutNames
             delegate: Rectangle {
               width: ListView.view.width; height: 32; radius: 6; color: liMa.containsMouse ? app.cPanel2 : "transparent"
-              Text { text: modelData; color: app.cInk; font.family: app.uiFont; font.pixelSize: 13; elide: Text.ElideRight; width: parent.width - 20; anchors { left: parent.left; leftMargin: 10; verticalCenter: parent.verticalCenter } }
+              Text { text: modelData; color: app.cInk; font.family: app.uiFont; font.pixelSize: 13; elide: Text.ElideRight; width: parent.width - 36; anchors { left: parent.left; leftMargin: 10; verticalCenter: parent.verticalCenter } }
               MouseArea { id: liMa; anchors.fill: parent; hoverEnabled: true; onClicked: app.loadName(modelData) }
+              Rectangle {
+                visible: liMa.containsMouse
+                anchors { right: parent.right; rightMargin: 6; verticalCenter: parent.verticalCenter }
+                width: 18; height: 18; radius: 9; color: app.cPanel2; border.color: app.cLine; border.width: 1
+                Text { anchors.centerIn: parent; text: "×"; color: app.cInk; font.family: app.uiFont; font.pixelSize: 12 }
+                MouseArea { anchors.fill: parent; onClicked: app.removeLayout(modelData) }
+              }
             }
           }
           Text { visible: app.layoutNames.length === 0; anchors.centerIn: parent; text: "no saved layouts"; color: app.cDim; font.family: app.uiFont; font.pixelSize: 12 }

@@ -1,6 +1,6 @@
 # Maintainer: qlfahey
 pkgname=omaspaces
-pkgver=0.1.5
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Design, launch, and navigate Hyprland workspaces — a native Quickshell spaces system for Omarchy"
 arch=('any')

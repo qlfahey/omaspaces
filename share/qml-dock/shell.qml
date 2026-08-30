@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Wayland
 import Quickshell.Io
+import Quickshell.Hyprland
 
 ShellRoot {
   id: app
@@ -114,8 +115,22 @@ ShellRoot {
     return items
   }
   function applyLayout(n) { Quickshell.execDetached(["omaspaces", "apply", n]) }
+  function removeLayout(n) { Quickshell.execDetached(["omaspaces", "rm", n]) }
   function buildNew() { Quickshell.execDetached(["omaspaces", "build"]) }
   function addPin() { Quickshell.execDetached(["omaspaces", "dock", "add"]) }
+  function launchNew(id) { Quickshell.execDetached(["uwsm-app", "--", "gtk-launch", id + ".desktop"]) }
+  function workspaceById(id) {
+    var v = Hyprland.workspaces.values
+    for (var i = 0; i < v.length; i++) if (v[i].id === id) return v[i]
+    return null
+  }
+  function workspaceIds() {
+    var ids = [1, 2, 3, 4, 5], v = Hyprland.workspaces.values
+    for (var i = 0; i < v.length; i++) { var id = v[i].id; if (id > 0 && id <= 10 && ids.indexOf(id) === -1) ids.push(id) }
+    ids.sort(function (a, b) { return a - b }); return ids
+  }
+  function focusWorkspace(id) { Quickshell.execDetached(["hyprctl", "dispatch", 'hl.dsp.focus({ workspace = "' + id + '" })']) }
+  function cycleWorkspace(dir) { Quickshell.execDetached(["hyprctl", "dispatch", 'hl.dsp.focus({ workspace = "' + (dir > 0 ? "e+1" : "e-1") + '" })']) }
 
   PanelWindow {
     id: win
@@ -138,10 +153,30 @@ ShellRoot {
       border.color: Qt.rgba(app.cInk.r, app.cInk.g, app.cInk.b, 0.12)
       border.width: 1
 
+      WheelHandler { onWheel: function (e) { app.cycleWorkspace(e.angleDelta.y < 0 ? 1 : -1) } }
+
       Row {
         id: bar
         anchors.centerIn: parent
         spacing: 6
+
+        Repeater {
+          model: app.workspaceIds()
+          delegate: Rectangle {
+            property int wid: modelData
+            property var ws: app.workspaceById(wid)
+            property bool wfocused: Hyprland.focusedWorkspace && Hyprland.focusedWorkspace.id === wid
+            property bool woccupied: ws && ws.toplevels.values.length > 0
+            width: 30; height: 34; radius: 9
+            anchors.verticalCenter: parent.verticalCenter
+            color: wfocused ? app.cAccent : (wsm.containsMouse ? app.cPanel2 : "transparent")
+            border.color: app.cLine; border.width: wfocused ? 0 : 1
+            opacity: (woccupied || wfocused) ? 1 : 0.45
+            Text { anchors.centerIn: parent; text: String(wid); color: wfocused ? "#0b0b0b" : app.cInk; font.family: app.uiFont; font.pixelSize: 13; font.bold: wfocused }
+            MouseArea { id: wsm; anchors.fill: parent; hoverEnabled: true; onClicked: app.focusWorkspace(wid) }
+          }
+        }
+        Rectangle { width: 1; height: 34; color: app.cLine; anchors.verticalCenter: parent.verticalCenter }
 
         Repeater {
           model: (app.pins, ToplevelManager.toplevels.values, app.dockItems())
@@ -180,6 +215,7 @@ ShellRoot {
               acceptedButtons: Qt.LeftButton | Qt.RightButton
               onClicked: function (m) {
                 if (m.button === Qt.RightButton) app.togglePin(it.id, it.pinned)
+                else if (m.modifiers & Qt.MetaModifier) app.launchNew(it.id)
                 else app.activateOrLaunch(it.id)
               }
             }
@@ -220,6 +256,14 @@ ShellRoot {
               Text { text: modelData; color: app.cInk; font.family: app.uiFont; font.pixelSize: 13; anchors.verticalCenter: parent.verticalCenter }
             }
             MouseArea { id: lm; anchors.fill: parent; hoverEnabled: true; onClicked: app.applyLayout(modelData) }
+            Rectangle {
+              visible: lm.containsMouse
+              anchors { top: parent.top; right: parent.right; topMargin: 2; rightMargin: 2 }
+              width: 15; height: 15; radius: 8
+              color: app.cPanel2; border.color: app.cLine; border.width: 1
+              Text { anchors.centerIn: parent; text: "×"; color: app.cInk; font.family: app.uiFont; font.pixelSize: 11 }
+              MouseArea { anchors.fill: parent; onClicked: app.removeLayout(modelData) }
+            }
           }
         }
 

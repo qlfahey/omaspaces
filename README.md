@@ -20,9 +20,12 @@ and mouse-driven, with a small CLI behind it.
   space with **Load** and edit it exactly. Already arranged a workspace by hand
   and want to keep it? Hit **Capture current** (or press `c`) to snapshot the live
   workspace into a named, reusable preset — no rebuilding it in the editor.
-- **Dock** — a macOS-style dock: pinned + running apps (icons, running dots,
-  hover-magnify; click to launch or focus, right-click to pin/unpin), your saved
-  layouts as pills, and a button to build a new space.
+- **Dock** — a macOS-style dock. A **workspace switcher** (click a space to jump
+  to it, scroll the dock to cycle through them). Pinned + running apps (running
+  dots, hover-magnify): click to launch or focus, **Super+click to open a fresh
+  instance on the current workspace**, right-click to pin/unpin. Your saved
+  layouts as pills — click to apply, hover and hit **×** to delete — plus a button
+  to build a new space.
 - **Layouts** — plain JSON in `~/.config/omarchy/layouts/`, readable and
   writable by hand or by an agent. `apply` places windows pixel-perfectly.
 
