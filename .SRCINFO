@@ -1,6 +1,6 @@
 pkgbase = omaspaces
 	pkgdesc = Design, launch, and navigate Hyprland workspaces — a native Quickshell spaces system for Omarchy
-	pkgver = 0.2.0
+	pkgver = 0.2.1
 	pkgrel = 1
 	url = https://github.com/qlfahey/omaspaces
 	arch = any
@@ -14,7 +14,7 @@ pkgbase = omaspaces
 	depends = wl-clipboard
 	optdepends = chromium: web builder fallback (omaspaces build --web)
 	optdepends = ttf-jetbrains-mono-nerd: matches the default Omarchy font
-	source = omaspaces-0.2.0.tar.gz::https://github.com/qlfahey/omaspaces/archive/refs/tags/v0.2.0.tar.gz
+	source = omaspaces-0.2.1.tar.gz::https://github.com/qlfahey/omaspaces/archive/refs/tags/v0.2.1.tar.gz
 	sha256sums = SKIP
 
 pkgname = omaspaces

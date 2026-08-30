@@ -94,11 +94,13 @@ ShellRoot {
   // Layout is a binary tree: a leaf holds {id, app}; a split holds {id, split, ratio, a, b}.
   property var tree: null
   property int rev: 0
+  property int structRev: 0
   property string sel: ""
   property int uid: 1
   function nid() { return "n" + (uid++) }
   function leaf(a) { return { id: nid(), app: a || null } }
   function touch() { rev++ }
+  function retouch() { structRev++; rev++ }
   function isLeaf(n) { return n && !n.split }
 
   function template(name) {
@@ -130,6 +132,9 @@ ShellRoot {
   }
   function leaves() { var l = []; walk(tree, 0, 0, 1, 1, l, null); return l }
   function dividers() { var l = [], d = []; walk(tree, 0, 0, 1, 1, l, d); return d }
+  function leafIds() { return leaves().map(function (x) { return x.id }) }
+  function dividerIds() { return dividers().map(function (x) { return x.id }) }
+  function dividerInfo(id) { var d = dividers(); for (var i = 0; i < d.length; i++) if (d[i].id === id) return d[i]; return null }
   function node(id) { var hit = null; (function rec(n) { if (!n) return; if (n.id === id) hit = n; else if (!isLeaf(n)) { rec(n.a); rec(n.b) } })(tree); return hit }
   function parent(id) { var hit = null; (function rec(n, p) { if (!n) return; if (n.id === id) hit = p; else if (!isLeaf(n)) { rec(n.a, n); rec(n.b, n) } })(tree, null); return hit }
   function rect(id) {
@@ -181,7 +186,7 @@ ShellRoot {
   }
   function selRect() { return sel ? rect(sel) : null }
   function firstLeaf(n) { return isLeaf(n) ? n.id : firstLeaf(n.a) }
-  function setTree(t) { tree = t; sel = firstLeaf(t); touch() }
+  function setTree(t) { tree = t; sel = firstLeaf(t); retouch() }
 
   function split(dir) {
     var n = node(sel)
@@ -190,7 +195,7 @@ ShellRoot {
     n.split = dir; n.ratio = 0.5; n.a = kept; n.b = leaf()
     delete n.app
     sel = kept.id
-    touch()
+    retouch()
   }
   function remove() {
     var p = parent(sel)
@@ -199,7 +204,7 @@ ShellRoot {
     for (var k in p) delete p[k]
     for (var k2 in sib) p[k2] = sib[k2]
     sel = p.id
-    touch()
+    retouch()
   }
   function guessClass(ex) { return (ex.split(" ")[0].split("/").pop() || "").toLowerCase() }
   function assign(a) {
@@ -289,7 +294,7 @@ ShellRoot {
     for (var i = 1; i < ns.length; i++) acc = { id: nid(), split: "v", ratio: 1 / (i + 1), a: acc, b: ns[i] }
     return acc
   }
-  function openLoaded(d) { tree = (d && d.tree) ? reid(d.tree) : fromTiles(d ? d.tiles : []); sel = firstLeaf(tree); touch() }
+  function openLoaded(d) { tree = (d && d.tree) ? reid(d.tree) : fromTiles(d ? d.tiles : []); sel = firstLeaf(tree); retouch() }
   function loadName(name) { showProc.command = ["omaspaces", "show", name]; showProc.running = true; showLoad = false; nameField.text = name }
 
   Component.onCompleted: setTree(template("main"))
@@ -482,40 +487,68 @@ ShellRoot {
             height: width / aspect
 
             Repeater {
-              model: (app.rev, app.tree ? app.leaves() : [])
+              model: (app.structRev, app.tree ? app.leafIds() : [])
               delegate: Rectangle {
-                property var d: modelData
+                id: tile
+                property string lid: modelData
+                property var d: (app.rev, app.rect(lid) || ({ x: 0, y: 0, w: 0, h: 0 }))
+                property var nd: (app.rev, app.node(lid))
+                property bool selc: lid === app.sel
                 x: d.x * canvas.width + 3; y: d.y * canvas.height + 3
                 width: d.w * canvas.width - 6; height: d.h * canvas.height - 6
                 radius: 7
-                color: d.id === app.sel ? Qt.rgba(app.cAccent.r, app.cAccent.g, app.cAccent.b, 0.16) : app.cPanel2
-                border.color: d.id === app.sel ? app.cAccent : app.cLine
-                border.width: d.id === app.sel ? 2 : 1
+                color: selc ? Qt.rgba(app.cAccent.r, app.cAccent.g, app.cAccent.b, 0.16) : app.cPanel2
+                border.color: selc ? app.cAccent : app.cLine
+                border.width: selc ? 2 : 1
                 Column {
                   anchors.centerIn: parent; spacing: 4
-                  Text { anchors.horizontalCenter: parent.horizontalCenter; text: d.app ? d.app.label : "empty"; color: d.app ? app.cInk : app.cDim; font.family: app.uiFont; font.pixelSize: 13; font.bold: !!d.app; font.italic: !d.app }
-                  Text { anchors.horizontalCenter: parent.horizontalCenter; text: (app.rev, app.cReady) ? app.pxW(d.w) + " × " + app.pxH(d.h) + " px" : Math.round(d.w * 100) + "% × " + Math.round(d.h * 100) + "%"; color: app.cInk; font.family: app.uiFont; font.pixelSize: 11 }
-                  Text { anchors.horizontalCenter: parent.horizontalCenter; text: Math.round(d.w * 100) + "% × " + Math.round(d.h * 100) + "%"; color: app.cDim; font.family: app.uiFont; font.pixelSize: 10 }
+                  Text { anchors.horizontalCenter: parent.horizontalCenter; text: (tile.nd && tile.nd.app) ? tile.nd.app.label : "empty"; color: (tile.nd && tile.nd.app) ? app.cInk : app.cDim; font.family: app.uiFont; font.pixelSize: 13; font.bold: !!(tile.nd && tile.nd.app); font.italic: !(tile.nd && tile.nd.app) }
+                  Text { anchors.horizontalCenter: parent.horizontalCenter; text: app.cReady ? app.pxW(tile.d.w) + " × " + app.pxH(tile.d.h) + " px" : Math.round(tile.d.w * 100) + "% × " + Math.round(tile.d.h * 100) + "%"; color: app.cInk; font.family: app.uiFont; font.pixelSize: 11 }
+                  Text { anchors.horizontalCenter: parent.horizontalCenter; text: Math.round(tile.d.w * 100) + "% × " + Math.round(tile.d.h * 100) + "%"; color: app.cDim; font.family: app.uiFont; font.pixelSize: 10 }
                 }
-                MouseArea { anchors.fill: parent; onClicked: { app.sel = d.id; app.touch() } }
+                MouseArea { anchors.fill: parent; onClicked: { app.sel = tile.lid; app.touch() } }
+                Rectangle {
+                  visible: tile.selc && app.canResize("w"); z: 5; width: 8; radius: 4
+                  anchors { right: parent.right; top: parent.top; bottom: parent.bottom; topMargin: 8; bottomMargin: 8; rightMargin: 2 }
+                  color: rEdge.pressed ? app.cAccent : Qt.rgba(app.cAccent.r, app.cAccent.g, app.cAccent.b, 0.55)
+                  MouseArea {
+                    id: rEdge; anchors.fill: parent; anchors.margins: -7; cursorShape: Qt.SizeHorCursor
+                    property real lx: 0
+                    onPressed: function (m) { app.sel = tile.lid; lx = mapToItem(canvas, m.x, m.y).x }
+                    onPositionChanged: function (m) { if (!pressed) return; var cx = mapToItem(canvas, m.x, m.y).x; app.resizeSel("w", (cx - lx) / canvas.width * app.cW); lx = cx }
+                  }
+                }
+                Rectangle {
+                  visible: tile.selc && app.canResize("h"); z: 5; height: 8; radius: 4
+                  anchors { bottom: parent.bottom; left: parent.left; right: parent.right; leftMargin: 8; rightMargin: 8; bottomMargin: 2 }
+                  color: bEdge.pressed ? app.cAccent : Qt.rgba(app.cAccent.r, app.cAccent.g, app.cAccent.b, 0.55)
+                  MouseArea {
+                    id: bEdge; anchors.fill: parent; anchors.margins: -7; cursorShape: Qt.SizeVerCursor
+                    property real ly: 0
+                    onPressed: function (m) { app.sel = tile.lid; ly = mapToItem(canvas, m.x, m.y).y }
+                    onPositionChanged: function (m) { if (!pressed) return; var cy = mapToItem(canvas, m.x, m.y).y; app.resizeSel("h", (cy - ly) / canvas.height * app.cH); ly = cy }
+                  }
+                }
               }
             }
             Repeater {
-              model: (app.rev, app.tree ? app.dividers() : [])
+              model: (app.structRev, app.tree ? app.dividerIds() : [])
               delegate: Item {
-                property var dv: modelData
-                x: dv.vertical ? dv.px * canvas.width - 7 : dv.px * canvas.width
-                y: dv.vertical ? dv.py * canvas.height : dv.py * canvas.height - 7
-                width: dv.vertical ? 14 : dv.len * canvas.width
-                height: dv.vertical ? dv.len * canvas.height : 14
-                Rectangle { anchors.centerIn: parent; width: dv.vertical ? 3 : parent.width * 0.85; height: dv.vertical ? parent.height * 0.85 : 3; radius: 2; color: dMa.containsMouse || dMa.pressed ? app.cAccent : app.cLine }
+                property string did: modelData
+                property var dv: (app.rev, app.dividerInfo(did))
+                visible: dv !== null
+                x: dv ? (dv.vertical ? dv.px * canvas.width - 7 : dv.px * canvas.width) : 0
+                y: dv ? (dv.vertical ? dv.py * canvas.height : dv.py * canvas.height - 7) : 0
+                width: dv ? (dv.vertical ? 14 : dv.len * canvas.width) : 0
+                height: dv ? (dv.vertical ? dv.len * canvas.height : 14) : 0
+                Rectangle { anchors.centerIn: parent; width: parent.width ? (dv && dv.vertical ? 3 : parent.width * 0.85) : 0; height: parent.height ? (dv && dv.vertical ? parent.height * 0.85 : 3) : 0; radius: 2; color: dMa.containsMouse || dMa.pressed ? app.cAccent : app.cLine }
                 MouseArea {
                   id: dMa
                   anchors.fill: parent
                   hoverEnabled: true
-                  cursorShape: dv.vertical ? Qt.SizeHorCursor : Qt.SizeVerCursor
+                  cursorShape: (dv && dv.vertical) ? Qt.SizeHorCursor : Qt.SizeVerCursor
                   onPositionChanged: function (m) {
-                    if (!pressed) return
+                    if (!pressed || !dv) return
                     var p = mapToItem(canvas, m.x, m.y)
                     var box = app.rect(dv.node.id)
                     if (!box) return
