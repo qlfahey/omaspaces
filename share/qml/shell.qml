@@ -113,6 +113,10 @@ ShellRoot {
     if (name === "grid") return { id: nid(), split: "h", ratio: 0.5,
                                   a: { id: nid(), split: "v", ratio: 0.5, a: leaf(), b: leaf() },
                                   b: { id: nid(), split: "v", ratio: 0.5, a: leaf(), b: leaf() } }
+    if (name === "main21") return { id: nid(), split: "v", ratio: 0.5, a: leaf(),
+                                    b: { id: nid(), split: "h", ratio: 0.5,
+                                         a: { id: nid(), split: "v", ratio: 0.5, a: leaf(), b: leaf() },
+                                         b: leaf() } }
     return leaf()
   }
   function walk(n, x, y, w, h, leaves, divs) {
@@ -303,7 +307,7 @@ ShellRoot {
   function openLoaded(d) { tree = (d && d.tree) ? reid(d.tree) : fromTiles(d ? d.tiles : []); sel = firstLeaf(tree); retouch() }
   function loadName(name) { showProc.command = ["omaspaces", "show", name]; showProc.running = true; showLoad = false; nameField.text = name }
 
-  Component.onCompleted: setTree(template("main"))
+  Component.onCompleted: setTree(template("main21"))
 
   PanelWindow {
     anchors { top: true; bottom: true; left: true; right: true }
@@ -434,7 +438,7 @@ ShellRoot {
           anchors { top: header.bottom; left: parent.left; right: side.left; topMargin: 14; leftMargin: 18; rightMargin: 18 }
           spacing: 8
           Repeater {
-            model: [["single", "Single"], ["cols2", "2 Columns"], ["cols3", "3 Columns"], ["main", "Main + Stack"], ["grid", "Grid 2×2"]]
+            model: [["single", "Single"], ["cols2", "2 Columns"], ["cols3", "3 Columns"], ["main", "Main + Stack"], ["main21", "Main + 2/1"], ["grid", "Grid 2×2"]]
             delegate: Rectangle {
               height: 30; radius: 7; width: tl.width + 22
               color: tlMa.containsMouse ? app.cPanel2 : app.cPanel; border.color: app.cLine; border.width: 1
