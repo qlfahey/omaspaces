@@ -184,6 +184,12 @@ ShellRoot {
     anc.node.ratio = clampR(want === "v", extentFrac, anc.node.ratio + (anc.side === "a" ? dR : -dR))
     touch()
   }
+  // Which side of the nearest resizable split the selection sits on ("a"=grow-right/down edge, "b"=grow-left/up edge).
+  function resizeSide(axis) {
+    var want = axis === "w" ? "v" : "h", path = pathTo(sel)
+    for (var i = path.length - 1; i >= 0; i--) if (path[i].node.split === want) return path[i].side
+    return ""
+  }
   function selRect() { return sel ? rect(sel) : null }
   function firstLeaf(n) { return isLeaf(n) ? n.id : firstLeaf(n.a) }
   function setTree(t) { tree = t; sel = firstLeaf(t); retouch() }
@@ -508,26 +514,40 @@ ShellRoot {
                 }
                 MouseArea { anchors.fill: parent; onClicked: { app.sel = tile.lid; app.touch() } }
                 Rectangle {
-                  visible: tile.selc && app.canResize("w"); z: 5; width: 8; radius: 4
+                  visible: tile.selc && app.resizeSide("w") === "a"; z: 5; width: 8; radius: 4
                   anchors { right: parent.right; top: parent.top; bottom: parent.bottom; topMargin: 8; bottomMargin: 8; rightMargin: 2 }
                   color: rEdge.pressed ? app.cAccent : Qt.rgba(app.cAccent.r, app.cAccent.g, app.cAccent.b, 0.55)
-                  MouseArea {
-                    id: rEdge; anchors.fill: parent; anchors.margins: -7; cursorShape: Qt.SizeHorCursor
+                  MouseArea { id: rEdge; anchors.fill: parent; anchors.margins: -7; cursorShape: Qt.SizeHorCursor
                     property real lx: 0
                     onPressed: function (m) { app.sel = tile.lid; lx = mapToItem(canvas, m.x, m.y).x }
-                    onPositionChanged: function (m) { if (!pressed) return; var cx = mapToItem(canvas, m.x, m.y).x; app.resizeSel("w", (cx - lx) / canvas.width * app.cW); lx = cx }
-                  }
+                    onPositionChanged: function (m) { if (!pressed) return; var cx = mapToItem(canvas, m.x, m.y).x; app.resizeSel("w", (cx - lx) / canvas.width * app.cW); lx = cx } }
                 }
                 Rectangle {
-                  visible: tile.selc && app.canResize("h"); z: 5; height: 8; radius: 4
+                  visible: tile.selc && app.resizeSide("w") === "b"; z: 5; width: 8; radius: 4
+                  anchors { left: parent.left; top: parent.top; bottom: parent.bottom; topMargin: 8; bottomMargin: 8; leftMargin: 2 }
+                  color: lEdge.pressed ? app.cAccent : Qt.rgba(app.cAccent.r, app.cAccent.g, app.cAccent.b, 0.55)
+                  MouseArea { id: lEdge; anchors.fill: parent; anchors.margins: -7; cursorShape: Qt.SizeHorCursor
+                    property real lx: 0
+                    onPressed: function (m) { app.sel = tile.lid; lx = mapToItem(canvas, m.x, m.y).x }
+                    onPositionChanged: function (m) { if (!pressed) return; var cx = mapToItem(canvas, m.x, m.y).x; app.resizeSel("w", -((cx - lx) / canvas.width * app.cW)); lx = cx } }
+                }
+                Rectangle {
+                  visible: tile.selc && app.resizeSide("h") === "a"; z: 5; height: 8; radius: 4
                   anchors { bottom: parent.bottom; left: parent.left; right: parent.right; leftMargin: 8; rightMargin: 8; bottomMargin: 2 }
                   color: bEdge.pressed ? app.cAccent : Qt.rgba(app.cAccent.r, app.cAccent.g, app.cAccent.b, 0.55)
-                  MouseArea {
-                    id: bEdge; anchors.fill: parent; anchors.margins: -7; cursorShape: Qt.SizeVerCursor
+                  MouseArea { id: bEdge; anchors.fill: parent; anchors.margins: -7; cursorShape: Qt.SizeVerCursor
                     property real ly: 0
                     onPressed: function (m) { app.sel = tile.lid; ly = mapToItem(canvas, m.x, m.y).y }
-                    onPositionChanged: function (m) { if (!pressed) return; var cy = mapToItem(canvas, m.x, m.y).y; app.resizeSel("h", (cy - ly) / canvas.height * app.cH); ly = cy }
-                  }
+                    onPositionChanged: function (m) { if (!pressed) return; var cy = mapToItem(canvas, m.x, m.y).y; app.resizeSel("h", (cy - ly) / canvas.height * app.cH); ly = cy } }
+                }
+                Rectangle {
+                  visible: tile.selc && app.resizeSide("h") === "b"; z: 5; height: 8; radius: 4
+                  anchors { top: parent.top; left: parent.left; right: parent.right; leftMargin: 8; rightMargin: 8; topMargin: 2 }
+                  color: tEdge.pressed ? app.cAccent : Qt.rgba(app.cAccent.r, app.cAccent.g, app.cAccent.b, 0.55)
+                  MouseArea { id: tEdge; anchors.fill: parent; anchors.margins: -7; cursorShape: Qt.SizeVerCursor
+                    property real ly: 0
+                    onPressed: function (m) { app.sel = tile.lid; ly = mapToItem(canvas, m.x, m.y).y }
+                    onPositionChanged: function (m) { if (!pressed) return; var cy = mapToItem(canvas, m.x, m.y).y; app.resizeSel("h", -((cy - ly) / canvas.height * app.cH)); ly = cy } }
                 }
               }
             }
